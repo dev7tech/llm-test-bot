@@ -2,6 +2,9 @@ from supabase import create_client, Client
 from openai import AsyncOpenAI
 import asyncio
 import time
+from datetime import datetime
+import pytz
+import os
 
 open_ai = AsyncOpenAI(api_key="sk-proj-QAKYkuXwcgLdih99nJ9lT3BlbkFJmLMfrcezDHUvsV2TkK5d")
 url: str = "https://ghmpkmcrsedpizfwgcqr.supabase.co"
@@ -34,26 +37,32 @@ def get_conversation_id():
   else:
     return existing_row
 
-def insert_chat_message(message, rule):
-  query = supabase.table('chat_messages').insert({"message": message, "rules": rule, "sender_id": userid , "receiver_id": ai_profile['id'], "conversations_id": conversationid})
+def insert_chat_message(message, rule, sleep_order = False):
+  query = supabase.table('chat_messages').insert({"message": message, "rules": rule, "sender_id": userid , "receiver_id": ai_profile['id'], "conversations_id": conversationid, "sleep_order": sleep_order})
   response = query.execute()
   return response
   
 def get_ai_msg(created_at):
-  generated_msg = ''
+  chat_message = {}
+  start_time = datetime.now()
   while True:
     try:
-      response = supabase.table('chat_messages').select('*').eq("sender_id", ai_profile['id']).eq("receiver_id", userid).eq("conversations_id", conversationid).gt('created_at', created_at).execute()
+      difference = (datetime.now() - start_time).total_seconds()
+      if difference >= 60:
+        insert_test_result(None, conversationid, None, "Huma AI didn't send message in 60s.")
+        print("Timed out error! Your Bot will be turned off soon.")
+        os._exit(0)
+      response = supabase.table('chat_messages').select('id', 'conversations_id', 'message').eq("sender_id", ai_profile['id']).eq("receiver_id", userid).eq("conversations_id", conversationid).gt('created_at', created_at).execute()
       supabase.realtime
-      if(len(response.data) == 0 or response.data[0]['message'] is None):
+      if len(response.data) == 0:
         continue
       else:
-        generated_msg = response.data[0]['message']
+        chat_message = response.data[0]
         break
     except Exception as e:
       print(f"An unexpected error occurred: {e}")
     time.sleep(1)
-  return generated_msg
+  return chat_message
 
 async def communicate_with_gpt(prompt) -> str:
   gpt4_msg = ''
@@ -88,6 +97,23 @@ def get_anon_profile():
   response = supabase.table('anon_profiles').select('*').eq('id', userid).execute()
   return response.data[0]
   
+def get_latest_message_time():
+  response = supabase.table('chat_messages').select('created_at').order('created_at', desc=True).limit(1).execute()
+  return response.data[0]['created_at']
+
+def check_sleep_order():
+  current_time = pytz.utc.localize(datetime.utcnow())
+  date_format = "%Y-%m-%dT%H:%M:%S.%f%z"
+  latest_msg_time = datetime.strptime(get_latest_message_time(), date_format)
+  time_difference = (current_time - latest_msg_time).total_seconds() / 60
+  if time_difference >= 30:
+    return True
+  else:
+    return False    
+
+def insert_test_result(result, conversation_id, chat_message_id, description):
+  supabase.table('test_results').insert({"conversations_id": conversation_id, "chat_messages_id": chat_message_id, "description": description}).execute()
+
 async def main():
   # The Rules
   rule="This is a conversation via text message."
@@ -100,6 +126,8 @@ async def main():
 
   # Get All AI Profiles
   ai_profiles = get_ai_profiles()
+  
+  sleep_order = check_sleep_order()
   
   global ai_profile
   for ai_profile in ai_profiles:    
@@ -121,13 +149,16 @@ async def main():
         break
       print(f"\n{username}: ", usermsg)
       prompt += f"\n{usermsg}\n\n{ai_profile['name']}:"
-      result = insert_chat_message(usermsg, rule)
+      result = insert_chat_message(usermsg, rule, True if sleep_order else False)
+      sleep_order = False
       if len(result.data) == 0:
         print('Failed to insert a message.\n')
         break
-      generated_msg = get_ai_msg(result.data[0]['created_at'])
+      chat_message = get_ai_msg(result.data[0]['created_at'])
+      generated_msg = chat_message['message'].strip()
       if generated_msg is not None:
-        if generated_msg.strip().startswith("Me:"):
+        if generated_msg.startswith("Me:"):
+          insert_test_result(chat_message['message'], chat_message['conversations_id'], chat_message['id'], "Message from Huma AI starts with 'ME':")
           generated_msg = generated_msg.split(":")[1].strip()
         print(f"\n{ai_profile['name']}: ", generated_msg)
         prompt += f"\n{generated_msg}\n\n{username}:"
@@ -135,6 +166,7 @@ async def main():
         count += 1
         continue
       else:
-        print("Database can't be reached or connection failed!n")
-        break
+        insert_test_result(chat_message['message'], chat_message['conversations_id'], chat_message['id'], "Huma AI sent no message!")
+        print("Noe message error occured! Your Bot will be turned off soon.")
+        os._exit(0)
 asyncio.run(main())
