@@ -5,13 +5,16 @@ import time
 from datetime import datetime
 import pytz
 import os
+from dotenv import dotenv_values
 
-open_ai = AsyncOpenAI(api_key="sk-proj-QAKYkuXwcgLdih99nJ9lT3BlbkFJmLMfrcezDHUvsV2TkK5d")
-url: str = "https://ghmpkmcrsedpizfwgcqr.supabase.co"
-key: str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdobXBrbWNyc2VkcGl6ZndnY3FyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDc5NDYyMDcsImV4cCI6MjAyMzUyMjIwN30.xZLK0E6bjfy6UoKqwZkZCs38L6uXJd8-VkknTmX2ULg"
+env_vars = dotenv_values('.env')
+api_key: str = env_vars.get("OPENAI_API_KEY")
+url: str = env_vars.get("SUPABASE_URL")
+key: str = env_vars.get("SUPABASE_KEY")
+userid: str = env_vars.get("USER_ID")
+
+open_ai = AsyncOpenAI(api_key=api_key)
 supabase: Client = create_client(url, key)
-
-userid = "2a5d81a4-f09d-5852-9cb6-41281f9827ef"
 
 def get_anon_profile():
   response = supabase.table('anon_profiles').select('*').eq('id', userid).execute()
