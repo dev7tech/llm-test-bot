@@ -10,7 +10,7 @@ class Prompt:
     return f"You've just encountered a {self.ai_profile['age']} year old {self.ai_profile['gender']} named {self.ai_profile['name']}.\n"
 
   def greet(self):
-    return f"Greet {self.ai_profile['name']} warmly, create a connection.\n"
+    return f"Greet {self.ai_profile['name']} in a charming and humorous way.\n"
   
   def learn_personal_details(self):
     return f"Learn more about {self.ai_profile['name']}'s personal details such as family, hobbies, etc.\n"
