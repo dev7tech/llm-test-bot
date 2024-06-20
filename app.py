@@ -6,6 +6,7 @@ from datetime import datetime
 import pytz
 import os
 from dotenv import dotenv_values
+from llmScenario import LLMScenario
 
 env_vars = dotenv_values('.env')
 api_key: str = env_vars.get("OPENAI_API_KEY")
@@ -21,7 +22,7 @@ def get_anon_profile():
   return response.data[0]
 
 def get_ai_profiles():
-  response = supabase.table('ai_profiles').select('*').order('created_at', desc=True).execute()
+  response = supabase.table('ai_profiles').select('*').execute()
   return response.data
 
 def get_latest_message_time():
@@ -37,16 +38,6 @@ def check_sleep_order():
     return True
   else:
     return False   
-
-def generate_scenario():
-  scenario = f"""
-  Your name is {username}, a 32-year-old man who enjoys reminiscing about past experiences.
-  You've just encountered a {ai_profile['age']} year old {ai_profile['gender']} named {ai_profile['name']} on a Tinder-like app.
-  You want to great warmly and then share a memorable experience that reveals something personal about you, creating a connection.
-  After sharing the memory, you want to ask a few questions to see if {ai_profile['name']} remembers what you said.
-  Make sure the conversation flows naturally and stays engaging.
-  """
-  return scenario
 
 def check_row_exists():
   try:
@@ -83,8 +74,8 @@ def get_ai_msg(created_at):
   while True:
     try:
       difference = (datetime.now() - start_time).total_seconds()
-      if difference >= 180:
-        insert_test_result(None, conversationid, conversation, None, f"[Error] {ai_profile['name']} didn't send message in 180s.")
+      if difference >= 100:
+        insert_test_result(None, conversationid, scenario.get_history(), None, f"[Error] {ai_profile['name']} didn't send message in 100s.")
         print("Timed out error! Bot will be turned off.")
         os._exit(0)
       response = supabase.table('chat_messages').select('id', 'conversations_id', 'message').eq("sender_id", ai_profile['id']).eq("receiver_id", userid).eq("conversations_id", conversationid).gt('created_at', created_at).order('created_at', desc=True).limit(1).execute()
@@ -95,19 +86,19 @@ def get_ai_msg(created_at):
         chat_message = response.data[0]
         break
     except Exception as e:
-      insert_test_result(None, conversationid, conversation, None, f"[Error] {e}")
+      insert_test_result(None, conversationid, scenario.get_history(), None, f"[Error] {e}")
       print(f"An unexpected error occurred: {e}\nBot will be turned off.")
       os._exit(0)
     time.sleep(1)
   return chat_message
 
-async def communicate_with_gpt(prompt) -> str:
+async def communicate_with_gpt(prompt, conversation) -> str:
   gpt4_msg = ''
   try:
     response = await open_ai.chat.completions.create(
       messages=[
-        {"role": "system", "content": scenario},
-        {"role": "user", "content": prompt}
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": conversation + f"{ai_profile['name']}: "}
       ],
       model="gpt-4",
       max_tokens=100
@@ -138,12 +129,17 @@ def process_test_result(gpt_response):
 
 async def rate_conversation(conversation):
   prompt = f"""
-  Rate the following conversation on how human-like it is on a scale of 1 to 10, where 1 is very robotic and 10 is very human-like. When providing your rating, consider the following criteria:
+  Rate the following conversation on how human-like it is on a scale of 1 to 10, where 1 is very robotic and 10 is very human-like. Consider the following criteria for your rating:
   - Naturalness of the dialogue flow
   - Use of idiomatic expressions and colloquialisms
   - Relevance and coherence of responses
   - Emotional and empathetic responses
   - Presence of any awkward or unnatural phrasing
+  - Consistency in personality and tone
+  - Appropriateness and timing of responses
+  - Depth of understanding and insight in responses
+  - Ability to handle ambiguous or open-ended questions
+  - Use of humor and cultural references
   
   Please provide your rating as a single number or a decimal (e.g., 9.5, 10, 9, 8.5) without any additional text.
   
@@ -160,7 +156,7 @@ async def rate_conversation(conversation):
         {"role": "user", "content": prompt},
       ],
       model="gpt-4",
-      max_tokens=100
+      max_tokens=150
     )
     gpt_response = response.choices[0].message.content
     rating, description = process_test_result(gpt_response)
@@ -175,53 +171,64 @@ async def main():
   rule="This is a conversation via text message."
   # Get My Anon Profile
   anon_profile = get_anon_profile()
-  # User name and Global It
-  global username
+  # User name
   username = anon_profile['name']
   # Get All AI Profiles
   ai_profiles = get_ai_profiles()
   # Sleep Order
   sleep_order = check_sleep_order()
-  
-  global scenario
-  # scenario = f" Your name is {username}, 32 year old man using a tinder like app to meet with strangers."
-  
+  # Context
+  context = f" Your name is {username}, 32 year old man using a tinder like app to meet with strangers."
+
   global ai_profile
   for ai_profile in ai_profiles:
     
-    # scenario += f"""
-    # You've just encountered a {ai_profile['age']} year old {ai_profile['gender']} named {ai_profile['name']}.
-    # You want to great warmly and then plan to learn more about {ai_profile['name']}'s personal details.
-    # Then you start to flirt by finding common interests.
-    # Keep the response concise and to the point.
-    # """
-    # Generate a Scenario
-    scenario = generate_scenario()    
+    # Scenario
+    global scenario
+    scenario = LLMScenario(username, context)
     
+    prompts = [
+      {
+        "description": "Greeting Scenario",
+        "content": (
+          f"You've just encountered a {ai_profile['age']} year old {ai_profile['gender']} named {ai_profile['name']}.\n"
+          f"Great {ai_profile['name']} warmly and then learn more about {ai_profile['name']}'s personal details.\n"
+          "Then start to flirt by finding common interests.\n"
+          "Keep the response concise and to the point.\n"
+        )
+      },
+      {
+        "description": "Memory Test Scenario",
+        "content": (
+          "Share your memorable experiences that reveals something personal about you, creating a connection.\n"
+          f"After sharing the memory, ask a few questions to see if {ai_profile['name']} remembers what you said.\n"
+          "Make sure the conversation flows naturally and stays engaging.\n"
+        )
+      }
+    ]
+    
+    scenario.set_prompt_list(prompts)
+    scenario.set_prompt()
+
     # Conversation Description
     print(f"\nThis is a conversation between {username} and {ai_profile['name']}:")
-    # Conversation ID and Global It
+    
+    # Conversation ID
     global conversationid
     conversationid = get_conversation_id()
-    # The First User message
-    usermsg = f"Hello {ai_profile['name']}! How is everything going?"
-    # A Variable To Count Number Of Messages
-    count = 0
-    # Define a prompt
-    prompt = ""
-    # Define a conversation
-    global conversation
-    conversation = ""
     
-    while(conversationid is not None):
+    # Initial message. You can change as you want.
+    usermsg = f"Hello {ai_profile['name']}! How are you?"
+    scenario.add_to_history(username, usermsg)
+    
+    if conversationid is None:
+      print("Could not find conversation ID")
+      os._exit(0)
       
-      # Print message
+    while True:
+      # Print user message
       print(f"\n{username}: ", usermsg)
-      # Update prompt
-      prompt += f"\n{username}:\n{usermsg}\n\n"
-      # Update conversation List
-      conversation += f"{username}: {usermsg}\n"
-      # Insert a message into chat_messages table
+      # Insert Message into DB
       result = insert_chat_message(usermsg, rule, True if sleep_order else False)
       sleep_order = False
       # If failed to insert a message into chat_messages table
@@ -231,35 +238,20 @@ async def main():
       # Get response from Huma AI
       chat_message = get_ai_msg(result.data[0]['created_at'])
       generated_msg = chat_message['message']
-      # If message from huma is not empty
-      if len(generated_msg) != 0:
-        if generated_msg.startswith("Me:"):
-          insert_test_result(None, conversationid, conversation, chat_message["id"], f"[Error] Message from {ai_profile['name']} starts with 'ME:'")
-          generated_msg = generated_msg.split(":")[1].strip()
-        # Print message
-        print(f"\n{ai_profile['name']}: ", generated_msg)
-        # Update prompt
-        prompt += f"{ai_profile['name']}:\n{generated_msg}\n"
-        # Update conversation List
-        conversation += f"{ai_profile['name']}: {generated_msg}\n"
-        
-        count += 1
-        # Limit number of messages to 10
-        if count == 10:
-          break
-        # Get response from LLM(gpt-4) with a prompt
-        usermsg = ''
-        while(len(usermsg) == 0):
-          usermsg = await communicate_with_gpt(prompt + f"\n{username}:")
-        continue
-      # If message from huma is empty
-      else:
-        insert_test_result(None, conversationid, conversation, chat_message["id"], f"[Error] {ai_profile['name']} sent an empty message!")
-        print("No message error occured! Bot will be turned off.")
-        # Exit
-        os._exit(0)
-        
-    rating, description = await rate_conversation(conversation)
+      print(f"\n{ai_profile['name']}: ", generated_msg)
+      # Add to history
+      response = scenario.add_to_history(ai_profile['name'], generated_msg)
+      if response is False:
+        break
+      # Generate user message using llm
+      usermsg, info = await scenario.run_scenario(communicate_with_gpt)
+      if info is False:
+        break
+      
+    # Rate how the conversation is human-like
+    rating, description = await rate_conversation(scenario.get_history())
     print("\nRating: ", rating, f"\n\nDescription: {description}")
-    insert_test_result(rating, conversationid, conversation, None, description)
+    # Insert test results into DB
+    insert_test_result(rating, conversationid, scenario.get_history(), None, description)
+    
 asyncio.run(main())
