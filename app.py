@@ -1,12 +1,14 @@
-from supabase import create_client, Client
 from openai import AsyncOpenAI
+from supabase import create_client, Client
+from dotenv import dotenv_values
+from datetime import datetime
 import asyncio
 import time
-from datetime import datetime
 import pytz
 import os
-from dotenv import dotenv_values
-from llmScenario import LLMScenario
+
+from Prompt import Prompt
+from Conversation import Conversation
 
 env_vars = dotenv_values('.env')
 api_key: str = env_vars.get("OPENAI_API_KEY")
@@ -75,7 +77,7 @@ def get_ai_msg(created_at):
     try:
       difference = (datetime.now() - start_time).total_seconds()
       if difference >= 100:
-        insert_test_result(None, conversationid, scenario.get_history(), None, f"[Error] {ai_profile['name']} didn't send message in 100s.")
+        insert_test_result(None, conversationid, conversation.get_conversation(), None, f"[Error] {ai_profile['name']} didn't send message in 100s.")
         print("Timed out error! Bot will be turned off.")
         os._exit(0)
       response = supabase.table('chat_messages').select('id', 'conversations_id', 'message').eq("sender_id", ai_profile['id']).eq("receiver_id", userid).eq("conversations_id", conversationid).gt('created_at', created_at).order('created_at', desc=True).limit(1).execute()
@@ -86,7 +88,7 @@ def get_ai_msg(created_at):
         chat_message = response.data[0]
         break
     except Exception as e:
-      insert_test_result(None, conversationid, scenario.get_history(), None, f"[Error] {e}")
+      insert_test_result(None, conversationid, conversation.get_conversation(), None, f"[Error] {e}")
       print(f"An unexpected error occurred: {e}\nBot will be turned off.")
       os._exit(0)
     time.sleep(1)
@@ -98,7 +100,7 @@ async def communicate_with_gpt(prompt, conversation) -> str:
     response = await open_ai.chat.completions.create(
       messages=[
         {"role": "system", "content": prompt},
-        {"role": "user", "content": conversation + f"{ai_profile['name']}: "}
+        {"role": "user", "content": conversation}
       ],
       model="gpt-4",
       max_tokens=100
@@ -177,49 +179,30 @@ async def main():
   ai_profiles = get_ai_profiles()
   # Sleep Order
   sleep_order = check_sleep_order()
-  # Context
-  context = f" Your name is {username}, 32 year old man using a tinder like app to meet with strangers."
 
   global ai_profile
   for ai_profile in ai_profiles:
     
-    # Scenario
-    global scenario
-    scenario = LLMScenario(username, context)
-    
-    prompts = [
-      {
-        "description": "Greeting Scenario",
-        "content": (
-          f"You've just encountered a {ai_profile['age']} year old {ai_profile['gender']} named {ai_profile['name']}.\n"
-          f"Great {ai_profile['name']} warmly and then learn more about {ai_profile['name']}'s personal details.\n"
-          "Then start to flirt by finding common interests.\n"
-          "Keep the response concise and to the point.\n"
-        )
-      },
-      {
-        "description": "Memory Test Scenario",
-        "content": (
-          "Share your memorable experiences that reveals something personal about you, creating a connection.\n"
-          f"After sharing the memory, ask a few questions to see if {ai_profile['name']} remembers what you said.\n"
-          "Make sure the conversation flows naturally and stays engaging.\n"
-        )
-      }
-    ]
-    
-    scenario.set_prompt_list(prompts)
-    scenario.set_prompt()
+    newPrompt = Prompt(username, ai_profile)
+
+    # Generate a Prompt
+    global prompt
+    prompt = newPrompt.generate_prompt()
+
+    # Generate a Conversation
+    global conversation
+    conversation = Conversation()
 
     # Conversation Description
     print(f"\nThis is a conversation between {username} and {ai_profile['name']}:")
-    
+
     # Conversation ID
     global conversationid
     conversationid = get_conversation_id()
-    
+
     # Initial message. You can change as you want.
     usermsg = f"Hello {ai_profile['name']}! How are you?"
-    scenario.add_to_history(username, usermsg)
+    conversation.add_to_conversation(username, usermsg)
     
     if conversationid is None:
       print("Could not find conversation ID")
@@ -228,30 +211,40 @@ async def main():
     while True:
       # Print user message
       print(f"\n{username}: ", usermsg)
+
       # Insert Message into DB
       result = insert_chat_message(usermsg, rule, True if sleep_order else False)
       sleep_order = False
+
       # If failed to insert a message into chat_messages table
       if len(result.data) == 0:
         print('Failed to insert a message.\n')
         break
+
       # Get response from Huma AI
       chat_message = get_ai_msg(result.data[0]['created_at'])
       generated_msg = chat_message['message']
-      print(f"\n{ai_profile['name']}: ", generated_msg)
-      # Add to history
-      response = scenario.add_to_history(ai_profile['name'], generated_msg)
-      if response is False:
-        break
-      # Generate user message using llm
-      usermsg, info = await scenario.run_scenario(communicate_with_gpt)
-      if info is False:
-        break
       
+      # Display a message generated from Huma AI
+      print(f"\n{ai_profile['name']}: ", generated_msg)
+
+      # Add to history
+      conversation.add_to_conversation(ai_profile['name'], generated_msg)
+
+      # If number of messages is 20
+      if conversation.get_count() == 20:
+        break
+
+      # Generate user message using llm
+      usermsg = ""
+      while len(usermsg) == 0:
+        usermsg = await communicate_with_gpt(prompt, (conversation.get_conversation() + f"{username}:"))
+
     # Rate how the conversation is human-like
-    rating, description = await rate_conversation(scenario.get_history())
-    print("\nRating: ", rating, f"\n\nDescription: {description}")
-    # Insert test results into DB
-    insert_test_result(rating, conversationid, scenario.get_history(), None, description)
+    rating, description = await rate_conversation(conversation.get_conversation())
+    print("\nRating: ", rating, f"\nDescription: {description}\n")
     
+    # Insert test results into DB
+    insert_test_result(rating, conversationid, conversation.get_conversation(), None, description)
+
 asyncio.run(main())
