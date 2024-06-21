@@ -228,17 +228,20 @@ async def main():
       # Display a message generated from Huma AI
       print(f"\n{ai_profile['name']}: ", generated_msg)
 
-      # Add to history
+      # Add to conversation
       conversation.add_to_conversation(ai_profile['name'], generated_msg)
 
       # If number of messages is 20
-      if conversation.get_count() == 20:
+      if conversation.get_count() == 30:
         break
 
       # Generate user message using llm
       usermsg = ""
       while len(usermsg) == 0:
         usermsg = await communicate_with_gpt(prompt, (conversation.get_conversation() + f"{username}:"))
+      
+      # Add to conversation
+      conversation.add_to_conversation(username, usermsg)
 
     # Rate how the conversation is human-like
     rating, description = await rate_conversation(conversation.get_conversation())
