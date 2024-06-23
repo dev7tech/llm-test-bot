@@ -24,7 +24,7 @@ def get_anon_profile():
   return response.data[0]
 
 def get_ai_profiles():
-  response = supabase.table('ai_profiles').select('*').execute()
+  response = supabase.table('ai_profiles').select('*').order('created_at', desc=True).execute()
   return response.data
 
 def get_latest_message_time():
@@ -65,8 +65,12 @@ def get_conversation_id():
   else:
     return existing_row
 
-def insert_chat_message(message, rule, sleep_order = False):
-  query = supabase.table('chat_messages').insert({"message": message, "rules": rule, "sender_id": userid , "receiver_id": ai_profile['id'], "conversations_id": conversationid, "sleep_order": sleep_order})
+def get_items():
+  response = supabase.table('items').select('*').order('created_at', desc=True).execute()
+  return response.data
+
+def insert_chat_message(message, rule, prompt_request = False, sleep_order = False, item_id=None):
+  query = supabase.table('chat_messages').insert({"message": message, "rules": rule, "sender_id": userid , "receiver_id": ai_profile['id'], "conversations_id": conversationid, "items_id": item_id,  "sleep_order": sleep_order, "prompt_request": prompt_request})
   response = query.execute()
   return response
   
@@ -76,11 +80,11 @@ def get_ai_msg(created_at):
   while True:
     try:
       difference = (datetime.now() - start_time).total_seconds()
-      if difference >= 100:
-        insert_test_result(None, conversationid, conversation.get_conversation(), None, f"[Error] {ai_profile['name']} didn't send message in 100s.")
+      if difference >= 200:
+        # insert_test_result(None, conversationid, conversation.get_conversation(), None, f"[Error] {ai_profile['name']} didn't send message in 100s.")
         print("Timed out error! Bot will be turned off.")
         os._exit(0)
-      response = supabase.table('chat_messages').select('id', 'conversations_id', 'message').eq("sender_id", ai_profile['id']).eq("receiver_id", userid).eq("conversations_id", conversationid).gt('created_at', created_at).order('created_at', desc=True).limit(1).execute()
+      response = supabase.table('chat_messages').select('*').eq("sender_id", ai_profile['id']).eq("receiver_id", userid).eq("conversations_id", conversationid).gt('created_at', created_at).order('created_at', desc=True).limit(1).execute()
       supabase.realtime
       if len(response.data) == 0 or len(response.data[0]['message']) == 0:
         continue
@@ -88,7 +92,7 @@ def get_ai_msg(created_at):
         chat_message = response.data[0]
         break
     except Exception as e:
-      insert_test_result(None, conversationid, conversation.get_conversation(), None, f"[Error] {e}")
+      # insert_test_result(None, conversationid, conversation.get_conversation(), None, f"[Error] {e}")
       print(f"An unexpected error occurred: {e}\nBot will be turned off.")
       os._exit(0)
     time.sleep(1)
@@ -170,7 +174,8 @@ async def rate_conversation(conversation):
 async def main():
   
   # The Rules
-  rule="This is a conversation via text message."
+  # rule="This is a conversation via text message."
+  rule="Imgae testing"
   # Get My Anon Profile
   anon_profile = get_anon_profile()
   # User name
@@ -179,75 +184,102 @@ async def main():
   ai_profiles = get_ai_profiles()
   # Sleep Order
   sleep_order = check_sleep_order()
+  # Get All Items
+  items = get_items()
 
   global ai_profile
   for ai_profile in ai_profiles:
     
-    newPrompt = Prompt(username, ai_profile)
-
-    # Generate a Prompt
-    global prompt
-    prompt = newPrompt.generate_prompt()
-
-    # Generate a Conversation
-    global conversation
-    conversation = Conversation()
-
-    # Conversation Description
-    print(f"\nThis is a conversation between {username} and {ai_profile['name']}:")
-
     # Conversation ID
     global conversationid
     conversationid = get_conversation_id()
-
-    # Initial message. You can change as you want.
-    usermsg = f"Hello {ai_profile['name']}! How are you?"
-    conversation.add_to_conversation(username, usermsg)
     
     if conversationid is None:
       print("Could not find conversation ID")
       os._exit(0)
-      
-    while True:
-      # Print user message
-      print(f"\n{username}: ", usermsg)
-
-      # Insert Message into DB
-      result = insert_chat_message(usermsg, rule, True if sleep_order else False)
-      sleep_order = False
-
-      # If failed to insert a message into chat_messages table
-      if len(result.data) == 0:
-        print('Failed to insert a message.\n')
-        break
-
-      # Get response from Huma AI
-      chat_message = get_ai_msg(result.data[0]['created_at'])
-      generated_msg = chat_message['message']
-      
-      # Display a message generated from Huma AI
-      print(f"\n{ai_profile['name']}: ", generated_msg)
-
-      # Add to conversation
-      conversation.add_to_conversation(ai_profile['name'], generated_msg)
-
-      # If number of messages is 20
-      if conversation.get_count() == 30:
-        break
-
-      # Generate user message using llm
-      usermsg = ""
-      while len(usermsg) == 0:
-        usermsg = await communicate_with_gpt(prompt, (conversation.get_conversation() + f"{username}:"))
-      
-      # Add to conversation
-      conversation.add_to_conversation(username, usermsg)
-
-    # Rate how the conversation is human-like
-    rating, description = await rate_conversation(conversation.get_conversation())
-    print("\nRating: ", rating, f"\nDescription: {description}\n")
     
-    # Insert test results into DB
-    insert_test_result(rating, conversationid, conversation.get_conversation(), None, description)
+    # Image Testing
+    if rule == "Imgae testing":
+      print("Image Testing ==>>")
+      for item in items:
+        print(f"\n{username}:\nMessage: \LORA {item['name']},  Items ID: {item['id']},  Prompt Request: True\n")
+        
+        # Insert Message into DB
+        result = insert_chat_message(f"\LORA {item['name']}", rule, True, True if sleep_order else False, item['id'])
+        sleep_order = False
+        
+        # If failed to insert a message into chat_messages table
+        if len(result.data) == 0:
+          print('Failed to insert a message.\n')
+          break
+
+        # Get response from Huma AI
+        chat_message = get_ai_msg(result.data[0]['created_at'])
+        generated_msg = chat_message['message']
+        ai_image = chat_message['image']
+        
+        # Display a message generated from Huma AI
+        print(f"{ai_profile['name']}:\nMessage: {generated_msg}, Image: {ai_image}\n")
+        
+    # Conversation via Text message
+    else:
+      newPrompt = Prompt(username, ai_profile)
+
+      # Generate a Prompt
+      global prompt
+      prompt = newPrompt.generate_prompt()
+
+      # Generate a Conversation
+      global conversation
+      conversation = Conversation()
+
+      # Conversation Description
+      print(f"\nThis is a conversation between {username} and {ai_profile['name']}:")
+      
+      # Initial message. You can change as you want.
+      usermsg = f"Hello {ai_profile['name']}! How are you?"
+      conversation.add_to_conversation(username, usermsg)
+      
+      while True:
+        # Print user message
+        print(f"\n{username}: ", usermsg)
+
+        # Insert Message into DB
+        result = insert_chat_message(usermsg, rule, False, True if sleep_order else False)
+        sleep_order = False
+
+        # If failed to insert a message into chat_messages table
+        if len(result.data) == 0:
+          print('Failed to insert a message.\n')
+          break
+
+        # Get response from Huma AI
+        chat_message = get_ai_msg(result.data[0]['created_at'])
+        generated_msg = chat_message['message']
+        
+        # Display a message generated from Huma AI
+        print(f"\n{ai_profile['name']}: ", generated_msg)
+
+        # Add to conversation
+        conversation.add_to_conversation(ai_profile['name'], generated_msg)
+
+        # If number of messages is 20
+        if conversation.get_count() == 30:
+          break
+
+        # Generate user message using llm
+        usermsg = ""
+        while len(usermsg) == 0:
+          usermsg = await communicate_with_gpt(prompt, (conversation.get_conversation() + f"{username}:"))
+        
+        # Add to conversation
+        conversation.add_to_conversation(username, usermsg)
+
+      # Rate how the conversation is human-like
+      rating, description = await rate_conversation(conversation.get_conversation())
+      print("\nRating: ", rating, f"\nDescription: {description}\n")
+      
+      # Insert test results into DB
+      insert_test_result(rating, conversationid, conversation.get_conversation(), None, description)
 
 asyncio.run(main())
